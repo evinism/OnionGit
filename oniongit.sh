@@ -88,7 +88,6 @@ function og_upchain(){
     branch=$1
   fi
   listchain_helper $branch
-  echo "-- end of chain --"
 }
 
 function og_downchain(){
@@ -106,8 +105,6 @@ function og_downchain(){
     echo "[multiple children]"
   elif [ -n "$children" ]; then
     og_downchain $children
-  else 
-    echo "-- end of chain --"
   fi
 }
 
@@ -119,7 +116,7 @@ function og_chain(){
     branch=$1
   fi
   # reverse the order of the upchain, appending a star as the last character on the last line
-  og_upchain $branch | tac | sed '$ s/$/*/'
+  og_upchain $branch | tail -r | sed '$ s/$/*/'
   og_downchain $branch | tail -n +2
 }
 
