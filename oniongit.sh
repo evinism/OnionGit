@@ -7,6 +7,7 @@ function og(){
     echo "  branch <branch> - create a new branch off the current branch"
     echo "  parent [branch] - get the parent of the current branch or the given branch"
     echo "  children [branch] - get the children of the current branch or the given branch"
+    echo "  downstream [branch] - list all branches that are downstream of the current branch"
     echo "  upchain [branch] - list the chain of branches from the current branch or the given 
 branch"
     echo "  downchain [branch] - list the chain of branches from the current branch or the given 
@@ -116,15 +117,14 @@ function og_chain(){
     branch=$1
   fi
   # reverse the order of the upchain, appending a star as the last character on the last line
-  og_upchain $branch | tail -r | sed '$ s/$/*/'
+  og_upchain $branch | (tac 2> /dev/null || tail -r) | sed '$ s/$/*/'
   og_downchain $branch | tail -n +2
 }
 
 function og_evolve(){
   # rebase all children on top of the current branch, recursively
   local branch=$(git rev-parse --abbrev-ref HEAD)
-  local children=$(og_children $branch)
-  for child in $children; do
+  og_children $branch | while read child ; do
     echo "Rebasing $child on $branch"
     git checkout $child
     git rebase $branch
@@ -180,10 +180,33 @@ function og_markmerged(){
     echo "Branch $branch is not merged"
     return 1
   fi
-  local children=$(og_children $branch)
-  for child in $children; do
+  og_children $branch | while read child ; do
     git checkout $child
     og_setparent main
+  done
+  git checkout $branch
+}
+
+function og_downstream(){
+  # List all branches that are downstream of the current branch
+  if [ ! -z "$1" ]; then
+    local branch=$1
+  else
+    local branch=$(git rev-parse --abbrev-ref HEAD)
+  fi
+  echo $branch
+  og_children $branch | while read child ; do
+    og_downstream $child
+  done
+}
+
+function og_rpush(){
+  # Push the current branch and all downstream branches
+  local branch=$(git rev-parse --abbrev-ref HEAD)
+  og_downstream $branch | while read downstream ; do
+    echo "Pushing $downstream"
+    git checkout $downstream
+    git push origin $downstream --force-with-lease
   done
   git checkout $branch
 }
