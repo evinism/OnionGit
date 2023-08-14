@@ -37,6 +37,7 @@ function og_branch(){
   fi
   local dependent=$1
   local base=$(git rev-parse --abbrev-ref HEAD)
+  local base_commit=$(git rev-parse HEAD)
 
   # If branch has already been created, fail
   if git show-ref --verify --quiet refs/heads/$dependent; then
@@ -45,7 +46,27 @@ function og_branch(){
   fi
 
   git checkout -b $dependent
-  git config branch.$dependent.description "$base"
+  git config branch.$dependent.description "$base;$base_commit"
+}
+
+function og_parenttuple(){
+  local branch
+  if [ $# -eq 0 ]; then
+    branch=$(git rev-parse --abbrev-ref HEAD)
+  else
+    branch=$1
+  fi
+  git config branch.$branch.description
+}
+
+function og_basecommit(){
+  local branch
+  if [ $# -eq 0 ]; then
+    branch=$(git rev-parse --abbrev-ref HEAD)
+  else
+    branch=$1
+  fi
+  echo $(og_parenttuple $branch | cut -d';' -s -f2)
 }
 
 function og_parent(){
@@ -55,7 +76,7 @@ function og_parent(){
   else
     branch=$1
   fi
-  git config branch.$branch.description
+  echo $(og_parenttuple $branch | cut -d';' -f1)
 }
 
 function og_children(){
@@ -126,11 +147,44 @@ function og_evolve(){
   local branch=$(git rev-parse --abbrev-ref HEAD)
   og_children $branch | while read child ; do
     echo "Rebasing $child on $branch"
+    local newbase=$(git rev-parse HEAD)
     git checkout $child
-    git rebase $branch
+    local basecommit=$(og_basecommit $child)
+    if [ -z "$basecommit" ]; then
+      echo "warning: no base commit found for $child, doing a normal rebase"
+      git rebase $branch
+      if [ $? -ne 0 ]; then
+        echo "Rebase failed, aborting"
+        git rebase --abort
+        return 1
+      fi
+    else
+      git rebase --onto $branch $basecommit
+      if [ $? -ne 0 ]; then
+        echo "Rebase failed, aborting"
+        git rebase --abort
+        return 1
+      fi
+      # Then rewrite base commit
+      git config branch.$child.description "$branch;$newbase"
+    fi
     og_evolve
+    if [ $? -ne 0 ]; then
+      return 1
+    fi
   done
   git checkout $branch
+}
+
+function og_slog(){
+  local branch=$1
+  local base=$(og_basecommit $branch)
+  if [ -z "$base" ]; then
+    echo "warning: no base commit found for $branch, doing a normal log"
+    git log $branch
+  else
+    git log $base..$branch
+  fi
 }
 
 function og_up(){
@@ -168,7 +222,15 @@ function og_setparent(){
     echo "Usage: og setparent <parent>"
     return 1
   fi
-  git config branch.$branch.description $parent
+  echo "How many commits should oniongit consider to be part of this branch?"
+  echo $(git log --oneline | head -n 5)
+  echo "Enter the number of commits, or leave blank for one commit"
+  read num_commits
+  if [ -z "$num_commits" ]; then
+    num_commits=1
+  fi
+  local basecommit=$(git rev-parse HEAD~$num_commits)
+  git config branch.$branch.description "$parent;$basecommit"
 }
 
 function og_markmerged(){
@@ -209,4 +271,69 @@ function og_rpush(){
     git push origin $downstream --force-with-lease
   done
   git checkout $branch
+}
+
+function og_rebase_onto_parent(){
+  # Rebase the current branch onto its parent
+  local branch=$(git rev-parse --abbrev-ref HEAD)
+  local parent=$(og_parent $branch)
+  if [ -z "$parent" ]; then
+    echo "No parent branch"
+    return 1
+  fi
+  local basecommit=$(og_basecommit $branch)
+  if [ -z "$basecommit" ]; then
+    echo "warning: no base commit found for $branch, doing a normal rebase"
+    git rebase $parent
+    if [ $? -ne 0 ]; then
+      echo "Rebase failed. Fix it up!!"
+      return 1
+    fi
+  else
+    git rebase --onto $parent $basecommit
+    if [ $? -ne 0 ]; then
+      echo "Rebase failed. Fix it up!!"
+      return 1
+    fi
+  fi
+}
+
+function og_insert_base_commits_on_chain(){
+  if [ ! -z "$1" ]; then
+    local branch=$1
+  else
+    local branch=$(git rev-parse --abbrev-ref HEAD)
+  fi
+  local newbase=$(git rev-parse $branch)
+  og_children $branch | while read child ; do
+    echo "Branch $child: Setting base commit $newbase"
+    git config branch.$child.description "$branch;$newbase"
+    og_insert_base_commits_on_chain $child
+  done
+}
+
+function og_remove_base_commits_on_chain(){
+  if [ ! -z "$1" ]; then
+    local branch=$1
+  else
+    local branch=$(git rev-parse --abbrev-ref HEAD)
+  fi
+  og_children $branch | while read child ; do
+    git config branch.$child.description "$branch"
+    remove_base_commits_on_chain $child
+  done
+}
+
+function og_set_base_commit_to_parent(){
+    if [ ! -z "$1" ]; then
+    local branch=$1
+  else
+    local branch=$(git rev-parse --abbrev-ref HEAD)
+  fi
+  local parent=$(og_parent $branch)
+  if [ -z "$parent" ]; then
+    echo "No parent branch"
+    return 1
+  fi
+  git config branch.$branch.description "$parent;$(git rev-parse $parent)"
 }
